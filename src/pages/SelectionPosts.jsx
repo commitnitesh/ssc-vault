@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Search, Filter, Briefcase, MapPin, IndianRupee, GraduationCap, Calendar, ChevronDown, ChevronUp, Download, Eye, AlertCircle,ExternalLink  } from 'lucide-react'
-import selectionPostsData from '../data/selectionPosts.json' // We'll move the JSON to a separate file
+import selectionPostsData from '../data/selectionPostsdata.json' // We'll move the JSON to a separate file
 import './SelectionPosts.css'
 
 const SelectionPosts = () => {
