@@ -19,6 +19,106 @@ const SelectionPosts = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const postsPerPage = 25
 
+  const [cartPosts, setCartPosts] = useState([])
+  const [showCart, setShowCart] = useState(false)
+
+  // Cart Functions
+  const addToCart = (post) => {
+    if (!cartPosts.find(p => p.postCode === post.postCode)) {
+      setCartPosts([...cartPosts, post])
+    }
+  }
+
+  const removeFromCart = (postCode) => {
+    setCartPosts(cartPosts.filter(p => p.postCode !== postCode))
+  }
+
+  const isInCart = (postCode) => {
+    return cartPosts.some(p => p.postCode === postCode)
+  }
+
+  const clearCart = () => {
+    setCartPosts([])
+  }
+
+  const printCart = () => {
+    const printWindow = window.open('', '_blank')
+    const cartHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>SSC Selection Posts - My List</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        h1 { color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #4F46E5; color: white; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .print-date { color: #666; margin-bottom: 20px; }
+        @media print {
+          .no-print { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+      <h1>SSC Selection Posts - Phase-XIV/2026</h1>
+      <p class="print-date">Generated on: ${new Date().toLocaleDateString()}</p>
+      <p>Total Posts: ${cartPosts.length}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>S.No</th>
+            <th>Region</th>
+            <th>Post Code</th>
+            <th>Post Name</th>
+            <th>Department</th>
+            <th>Age</th>
+            <th>Pay Level</th>
+            <th>UR</th>
+            <th>SC</th>
+            <th>ST</th>
+            <th>OBC</th>
+            <th>EWS</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cartPosts.map((post, i) => {
+      const vac = getCategoryVacancy(post)
+      const dept = getDepartmentName(post)
+      return `
+              <tr>
+                <td>${i + 1}</td>
+                <td>${post.region}</td>
+                <td>${post.postCode}</td>
+                <td>${post.postName}</td>
+                <td>${dept}</td>
+                <td>${getAge(post)}</td>
+                <td>Level ${getPayLevel(post)}</td>
+                <td>${vac.ur}</td>
+                <td>${vac.sc}</td>
+                <td>${vac.st}</td>
+                <td>${vac.obc}</td>
+                <td>${vac.ews}</td>
+                <td><strong>${vac.total}</strong></td>
+              </tr>
+            `
+    }).join('')}
+        </tbody>
+      </table>
+      <div class="no-print" style="margin-top: 30px; text-align: center;">
+        <button onclick="window.print()" style="padding: 10px 30px; background: #4F46E5; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
+          🖨️ Print / Save as PDF
+        </button>
+      </div>
+    </body>
+    </html>
+  `
+    printWindow.document.write(cartHTML)
+    printWindow.document.close()
+  }
+
   // Extract unique values for filters
   const regions = useMemo(() => [...new Set(selectionPostsData.map(post => post.region))].sort(), [])
   const examLevels = ['Matriculation (10th)', 'Higher Secondary (10+2)', 'Graduation & Above']
@@ -211,7 +311,20 @@ const SelectionPosts = () => {
           </span>
           <h1 className="page-title">SSC Selection Posts</h1>
           <p className="page-subtitle">{uniquePosts.length} Vacancies Available</p>
+          <div className="cart-header">
+            <p className="page-subtitle">{uniquePosts.length} Vacancies Available</p>
+            <button
+              className={`cart-toggle-btn ${cartPosts.length > 0 ? 'has-items' : ''}`}
+              onClick={() => setShowCart(!showCart)}
+            >
+              <Briefcase size={18} />
+              My List
+              {cartPosts.length > 0 && <span className="cart-count">{cartPosts.length}</span>}
+            </button>
+          </div>
         </div>
+
+
 
         {/* Search and Filter Bar */}
         <div className="search-filter-section">
@@ -318,6 +431,57 @@ const SelectionPosts = () => {
           </div>
         )}
 
+        {/* Cart Panel */}
+        {showCart && (
+          <div className="cart-panel">
+            <div className="cart-header-bar">
+              <h3>My Selected Posts ({cartPosts.length})</h3>
+              <div className="cart-actions">
+                {cartPosts.length > 0 && (
+                  <>
+                    <button className="cart-print-btn" onClick={printCart}>
+                      <Download size={16} /> Print / PDF
+                    </button>
+                    <button className="cart-clear-btn" onClick={clearCart}>
+                      Clear All
+                    </button>
+                  </>
+                )}
+                <button className="cart-close-btn" onClick={() => setShowCart(false)}>
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {cartPosts.length === 0 ? (
+              <div className="cart-empty">
+                <p>No posts added yet. Click "Add to List" on any post to save it here.</p>
+              </div>
+            ) : (
+              <div className="cart-items">
+                {cartPosts.map((post, index) => {
+                  const vac = getCategoryVacancy(post)
+                  return (
+                    <div key={post.postCode} className="cart-item">
+                      <span className="cart-item-sno">{index + 1}.</span>
+                      <div className="cart-item-details">
+                        <span className="cart-item-name">{post.postName}</span>
+                        <span className="cart-item-meta">{post.postCode} | {post.region} | L{getPayLevel(post)} | Total: {vac.total}</span>
+                      </div>
+                      <button
+                        className="cart-item-remove"
+                        onClick={() => removeFromCart(post.postCode)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Results Summary */}
         <div className="results-summary">
           <span>
@@ -364,9 +528,25 @@ const SelectionPosts = () => {
                 return (
                   <tr key={post.postCode} onClick={() => setSelectedPost(post)}>
                     <td>
-                      <button className="view-btn">
-                        <Eye size={16} />
-                      </button>
+                      <div className="table-actions">
+                        <button
+                          className="view-btn"
+                          onClick={(e) => { e.stopPropagation(); setSelectedPost(post); }}
+                          title="View Details"
+                        >
+                          <Eye size={16} />
+                        </button>
+                        <button
+                          className={`add-cart-btn ${isInCart(post.postCode) ? 'added' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            isInCart(post.postCode) ? removeFromCart(post.postCode) : addToCart(post);
+                          }}
+                          title={isInCart(post.postCode) ? "Remove from List" : "Add to List"}
+                        >
+                          {isInCart(post.postCode) ? '✓' : '+'}
+                        </button>
+                      </div>
                     </td>
                     <td>{indexOfFirstPost + index + 1}</td>
                     <td><span className="region-badge">{post.region?.substring(0, 3)}</span></td>
