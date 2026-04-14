@@ -1,688 +1,1045 @@
-import { useState, useMemo } from 'react'
-import { Search, Filter, Briefcase, Download, Eye, AlertCircle, ExternalLink, X } from 'lucide-react'
-import selectionPostsData from '../data/selectionPostsdata.json'
-import './SelectionPosts.css'
+// src/pages/SelectionPosts.jsx
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import './SelectionPosts.css';
+
+// Import both JSON files
+import rawPostsData from '../data/sppivraw.json';
+import detailedPostsData from '../data/sppiv.json';
 
 const SelectionPosts = () => {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selectedPost, setSelectedPost] = useState(null)
+  // ==================== STATE MANAGEMENT ====================
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Filter states
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  // Update filter state - add category vacancy filters
   const [filters, setFilters] = useState({
     region: '',
     examLevel: '',
     payLevel: '',
+    classification: '',
+    maxAge: '',
+    hasExperience: '',
     skillTest: '',
-    ministry: '',
-    experience: '',
-    vacancyCategory: ''
-  })
-  const [showFilters, setShowFilters] = useState(false)
-  const [currentPage, setCurrentPage] = useState(1)
-  const postsPerPage = 25
+    pwdSuitable: '',
+    // Category vacancy filters
+    showUR: false,
+    showSC: false,
+    showST: false,
+    showOBC: false,
+    showEWS: false,
+    showESM: false,
+  });
+  // Cart state
+  const [cartItems, setCartItems] = useState(() => {
+    const saved = localStorage.getItem('sscCart');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showCart, setShowCart] = useState(false);
 
-  const [cartPosts, setCartPosts] = useState([])
-  const [showCart, setShowCart] = useState(false)
+  // UI states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: 'srNo', direction: 'asc' });
+  const itemsPerPage = 20;
 
-  // Cart Functions
-  const addToCart = (post) => {
-    if (!cartPosts.find(p => p.postCode === post.postCode)) {
-      setCartPosts([...cartPosts, post])
+  const filterPanelRef = useRef(null);
+
+  // ==================== HELPER FUNCTIONS ====================
+  const extractDepartment = (details) => {
+    if (!details) return '';
+
+    // Try Office Name first
+    let match = details.match(/Office Name\s*([^•]*?)(?=Additional Details|Grade Pay|$)/);
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
+      return match[1].trim();
     }
-  }
 
-  const removeFromCart = (postCode) => {
-    setCartPosts(cartPosts.filter(p => p.postCode !== postCode))
-  }
+    // Try Department Name
+    match = details.match(/Department Name\s*([^•]*?)(?=Office Name|Additional Details|Grade Pay|$)/);
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
+      return match[1].trim();
+    }
 
-  const isInCart = (postCode) => {
-    return cartPosts.some(p => p.postCode === postCode)
-  }
+    // Try Additional Details
+    match = details.match(/Additional Details of User Department\s*([^•]*?)(?=Grade Pay|$)/);
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
+      return match[1].trim();
+    }
 
-  const clearCart = () => {
-    setCartPosts([])
-  }
+    return '';
+  };
 
-  const printCart = () => {
-    const printWindow = window.open('', '_blank')
-    const cartHTML = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>SSC Selection Posts - My List</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 20px; }
-        h1 { color: #333; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background: #4F46E5; color: white; }
-        tr:nth-child(even) { background: #f9f9f9; }
-        .print-date { color: #666; margin-bottom: 20px; }
-        @media print {
-          .no-print { display: none; }
+  const extractMinistry = (details) => {
+    if (!details) return '';
+    const match = details.match(/Ministry Name\s*([^•]*?)(?=Department Name|$)/);
+    return match ? match[1].trim() : '';
+  };
+
+  const extractAgeLimit = (details) => {
+    if (!details) return { min: 18, max: 30 };
+    const match = details.match(/Age Limit[^•]*?(\d+)\s*-\s*(\d+)/);
+    return match ? { min: parseInt(match[1]), max: parseInt(match[2]) } : { min: 18, max: 30 };
+  };
+
+  const extractFullEducation = (details) => {
+    if (!details) return '';
+    let text = details.replace(/Level of Examination[^•]*/, '').trim();
+    text = text.replace(/Essential Qualifications\s*/, '');
+    text = text.replace(/●/g, '\n• ');
+    text = text.replace(/##/g, '');
+    text = text.replace(/\s+/g, ' ').trim();
+    return text;
+  };
+
+const extractExperience = (details) => {
+  if (!details) return false;
+  
+  return /experience/i.test(details);
+};
+
+  const extractPwdSuitable = (details) => {
+    if (!details) return 'No';
+    const oh = details.includes('OHYes');
+    const hh = details.includes('HHYes');
+    const vh = details.includes('VHYes');
+    if (oh && hh && vh) return 'Yes (All)';
+    if (oh || hh || vh) return 'Yes (Partial)';
+    if (details.includes('OHNo') && details.includes('HHNo') && details.includes('VHNo')) return 'No';
+    return 'No';
+  };
+
+  const extractClassification = (details) => {
+    if (!details) return '';
+    const match = details.match(/Classification\s*([^•]*?)(?=Gender|Pwd|Requisition|$)/);
+    return match ? match[1].trim() : '';
+  };
+
+  const extractGender = (details) => {
+    if (!details) return '';
+    const genders = [];
+    if (details.includes('●Female')) genders.push('Female');
+    if (details.includes('●Male')) genders.push('Male');
+    if (details.includes('●Transgender')) genders.push('Transgender');
+    return genders.length ? genders.join(', ') : 'All';
+  };
+
+  const extractExamLevel = (educationDetails) => {
+    if (!educationDetails) return 'Other';
+
+    // First check the Level of Examination field
+    const levelMatch = educationDetails.match(/Level of Examination\s*([^•]*)/);
+    if (levelMatch) {
+      const level = levelMatch[1].trim().toLowerCase();
+      if (level.includes('graduation') || level.includes('graduate')) return 'Graduate';
+      if (level.includes('higher secondary') || level.includes('10+2')) return '12th';
+      if (level.includes('matriculation') || level.includes('10th')) return '10th';
+    }
+
+    // Fallback to checking the whole text
+    const details = educationDetails.toLowerCase();
+    if (details.includes('graduation') || details.includes('bachelor') || details.includes('master') || details.includes('degree')) return 'Graduate';
+    if (details.includes('higher secondary') || details.includes('10+2') || details.includes('12th') || details.includes('intermediate')) return '12th';
+    if (details.includes('matriculation') || details.includes('10th') || details.includes('sslc')) return '10th';
+
+    return 'Other';
+  };
+
+  const extractPayLevel = (payScale) => {
+    if (!payScale) return '';
+    const match = payScale.match(/Level\s*(\d+)/);
+    return match ? `Level ${match[1]}` : '';
+  };
+
+  const extractPayLevelNumber = (payScale) => {
+    if (!payScale) return 0;
+    const match = payScale.match(/Level\s*(\d+)/);
+    return match ? parseInt(match[1]) : 0;
+  };
+
+  const parseVacancies = (vacancyString) => {
+    if (!vacancyString) return { ur: 0, sc: 0, st: 0, obc: 0, ews: 0, total: 0, esm: 0, pwdOh: 0, pwdHh: 0, pwdVh: 0, pwdOthers: 0 };
+
+    return {
+      ur: parseInt(vacancyString.match(/UR\s*(\d+)/i)?.[1]) || 0,
+      sc: parseInt(vacancyString.match(/SC\s*(\d+)/i)?.[1]) || 0,
+      st: parseInt(vacancyString.match(/ST\s*(\d+)/i)?.[1]) || 0,
+      obc: parseInt(vacancyString.match(/OBC\s*(\d+)/i)?.[1]) || 0,
+      ews: parseInt(vacancyString.match(/EWS\s*(\d+)/i)?.[1]) || 0,
+      total: parseInt(vacancyString.match(/Total\s*(\d+)/i)?.[1]) || 0,
+      esm: parseInt(vacancyString.match(/ESM\s*(\d+)/i)?.[1]) || 0,
+      pwdOh: parseInt(vacancyString.match(/OH\s*(\d+)/i)?.[1]) || 0,
+      pwdHh: parseInt(vacancyString.match(/HH\s*(\d+)/i)?.[1]) || 0,
+      pwdVh: parseInt(vacancyString.match(/VH\s*(\d+)/i)?.[1]) || 0,
+      pwdOthers: parseInt(vacancyString.match(/Others\s*(\d+)/i)?.[1]) || 0,
+    };
+  };
+
+  const extractSkillTest = (departmentalDetails) => {
+    if (!departmentalDetails) return 'No';
+    return departmentalDetails.includes('Skill Test RequiredYes') ? 'Yes' : 'No';
+  };
+
+  const getRegionCode = (region) => {
+    const regionMap = {
+      'Central Region': 'CR',
+      'Eastern Region': 'ER',
+      'Karnataka Kerala Region': 'KKR',
+      'Madhya Pradesh Region': 'MPR',
+      'North Eastern Region': 'NER',
+      'Northern Region': 'NR',
+      'North Western Region': 'NWR',
+      'Southern Region': 'SR',
+      'Western Region': 'WR'
+    };
+    return regionMap[region] || region;
+  };
+
+  // Get all searchable text from a post - EXTENSIVE search
+  const getSearchableText = (post) => {
+    return `
+      ${post.srNo} ${post.postName} ${post.postCode} ${post.region} ${post.regionCode}
+      ${post.department} ${post.ministry} ${post.fullEducation} ${post.classification}
+      ${post.payScale} ${post.payLevel} ${post.gender} ${post.advertisement}
+      ${post.ageLimit.min} ${post.ageLimit.max} ${post.experience}
+      ${post.pwdSuitable} ${post.skillTest}
+    `.toLowerCase();
+  };
+
+  // ==================== LOAD AND COMBINE DATA ====================
+  useEffect(() => {
+    try {
+      // Create a map of detailed posts by postCode
+      const detailedMap = {};
+      detailedPostsData.forEach(post => {
+        detailedMap[post.postCode] = post;
+      });
+
+      // Process raw data and merge with detailed data
+      const processedData = rawPostsData.map((rawPost, index) => {
+        const detailedPost = detailedMap[rawPost['Post Code']];
+
+        if (detailedPost) {
+          // Use detailed post data
+          const vacancies = parseVacancies(detailedPost.categoryWiseVacancy);
+
+          return {
+            srNo: index + 1,
+            id: detailedPost.postCode,
+            region: detailedPost.region || '',
+            regionCode: getRegionCode(detailedPost.region),
+            postCode: detailedPost.postCode,
+            postName: detailedPost.postName,
+            department: extractDepartment(detailedPost.departmentalDetails),
+            ministry: extractMinistry(detailedPost.departmentalDetails),
+            ageLimit: extractAgeLimit(detailedPost.additionalDetails),
+            payScale: detailedPost.payScale,
+            payLevel: extractPayLevel(detailedPost.payScale),
+            payLevelNum: extractPayLevelNumber(detailedPost.payScale),
+            examLevel: extractExamLevel(detailedPost.educationDetails),
+            fullEducation: extractFullEducation(detailedPost.educationDetails),
+            experience: extractExperience(detailedPost.educationDetails),
+            gender: extractGender(detailedPost.additionalDetails),
+            ...vacancies,
+            pwdSuitable: extractPwdSuitable(detailedPost.additionalDetails),
+            skillTest: extractSkillTest(detailedPost.departmentalDetails),
+            classification: extractClassification(detailedPost.additionalDetails),
+            advertisement: detailedPost.advertisement || '',
+            rawEducationDetails: detailedPost.educationDetails,
+            rawDepartmentalDetails: detailedPost.departmentalDetails,
+            rawAdditionalDetails: detailedPost.additionalDetails,
+          };
+        } else {
+          // Fallback to raw data parsing
+          const detailsParts = rawPost.Details.split(' ');
+
+          // Parse vacancy numbers from the end
+          const numParts = rawPost.Details.match(/\d+/g);
+          let vacancies = { ur: 0, sc: 0, st: 0, obc: 0, ews: 0, total: 0, esm: 0, pwdOh: 0, pwdHh: 0, pwdVh: 0, pwdOthers: 0 };
+
+          if (numParts && numParts.length >= 11) {
+            const nums = numParts.slice(-11).map(Number);
+            vacancies = {
+              sc: nums[0] || 0, st: nums[1] || 0, obc: nums[2] || 0, ur: nums[3] || 0,
+              ews: nums[4] || 0, total: nums[5] || 0, esm: nums[6] || 0,
+              pwdOh: nums[7] || 0, pwdHh: nums[8] || 0, pwdVh: nums[9] || 0, pwdOthers: nums[10] || 0,
+            };
+          }
+
+          // Extract age range
+          const ageMatch = rawPost.Details.match(/(\d+)\s*-\s*(\d+)/);
+          let ageMin = 18, ageMax = 30;
+          if (ageMatch) {
+            ageMin = parseInt(ageMatch[1]);
+            ageMax = parseInt(ageMatch[2]);
+          }
+
+          // Extract post name (everything before age)
+          let postName = rawPost.Details;
+          if (ageMatch) {
+            const ageIndex = rawPost.Details.indexOf(ageMatch[0]);
+            postName = rawPost.Details.substring(0, ageIndex).trim();
+          }
+
+          return {
+            srNo: index + 1,
+            id: rawPost['Post Code'],
+            region: getRegionFullName(rawPost.Region),
+            regionCode: rawPost.Region,
+            postCode: rawPost['Post Code'],
+            postName: postName,
+            department: '',
+            ministry: '',
+            ageLimit: { min: ageMin, max: ageMax },
+            payScale: '',
+            payLevel: '',
+            payLevelNum: 0,
+            examLevel: 'Other',
+            fullEducation: '',
+            experience: 0,
+            gender: '',
+            ...vacancies,
+            pwdSuitable: 'Unknown',
+            skillTest: 'No',
+            classification: '',
+            advertisement: 'Phase-XIV/2026/Selection Posts',
+            rawEducationDetails: '',
+            rawDepartmentalDetails: '',
+            rawAdditionalDetails: '',
+          };
         }
-      </style>
-    </head>
-    <body>
-      <h1>SSC Selection Posts - Phase-XIV/2026</h1>
-      <p class="print-date">Generated on: ${new Date().toLocaleDateString()}</p>
-      <p>Total Posts: ${cartPosts.length}</p>
-      <table>
-        <thead>
-          <tr>
-            <th>S.No</th>
-            <th>Region</th>
-            <th>Post Code</th>
-            <th>Post Name</th>
-            <th>Department</th>
-            <th>Age</th>
-            <th>Pay Level</th>
-            <th>UR</th>
-            <th>SC</th>
-            <th>ST</th>
-            <th>OBC</th>
-            <th>EWS</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${cartPosts.map((post, i) => {
-      const vac = getCategoryVacancy(post)
-      const dept = getDepartmentName(post)
-      return `
-              <tr>
-                <td>${i + 1}</td>
-                <td>${post.region}</td>
-                <td>${post.postCode}</td>
-                <td>${post.postName}</td>
-                <td>${dept}</td>
-                <td>${getAge(post)}</td>
-                <td>Level ${getPayLevel(post)}</td>
-                <td>${vac.ur}</td>
-                <td>${vac.sc}</td>
-                <td>${vac.st}</td>
-                <td>${vac.obc}</td>
-                <td>${vac.ews}</td>
-                <td><strong>${vac.total}</strong></td>
-              </tr>
-            `
-    }).join('')}
-        </tbody>
-      </table>
-      <div class="no-print" style="margin-top: 30px; text-align: center;">
-        <button onclick="window.print()" style="padding: 10px 30px; background: #4F46E5; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
-          🖨️ Print / Save as PDF
-        </button>
-      </div>
-    </body>
-    </html>
-  `
-    printWindow.document.write(cartHTML)
-    printWindow.document.close()
-  }
+      });
 
-  // Extract unique values for filters
-  const regions = useMemo(() => [...new Set(selectionPostsData.map(post => post.region))].sort(), [])
-  const examLevels = ['Matriculation (10th)', 'Higher Secondary (10+2)', 'Graduation & Above']
-
-  const payLevels = useMemo(() => {
-    const unique = [...new Set(selectionPostsData.map(post => {
-      const match = post.payScale?.match(/Level (\d+)/)
-      return match ? `Level ${match[1]}` : null
-    }))]
-    return unique.filter(Boolean).sort((a, b) => parseInt(a.match(/\d+/)[0]) - parseInt(b.match(/\d+/)[0]))
-  }, [])
-
-  const ministries = useMemo(() => {
-    const unique = [...new Set(selectionPostsData.map(post => {
-      const match = post.departmentalDetails?.match(/Ministry Name(.+?)Department Name/)
-      return match ? match[1].trim() : 'Other'
-    }))]
-    return unique.filter(Boolean).sort()
-  }, [])
-
-  // Get Exam Level
-  const getExamLevel = (post) => {
-    const eduText = post.educationDetails || ''
-    if (eduText.includes('Matriculation (10th)')) return 'Matriculation (10th)'
-    if (eduText.includes('Higher Secondary (10+2)')) return 'Higher Secondary (10+2)'
-    if (eduText.includes('Graduation & Above')) return 'Graduation & Above'
-    return 'N/A'
-  }
-
-  // Check if Experience is Required
-  const hasExperience = (post) => {
-    const eduText = post.educationDetails?.toLowerCase() || ''
-    return eduText.includes('experience')
-  }
-
-  const getExperienceDisplay = (post) => {
-    return hasExperience(post) ? 'Yes' : 'No'
-  }
-
-  // Get Skill Test Required
-  const getSkillTest = (post) => {
-    const deptDetails = post.departmentalDetails || ''
-    if (deptDetails.includes('Skill Test RequiredYes')) return 'Yes'
-    if (deptDetails.includes('Skill Test RequiredNo')) return 'No'
-    return 'N/A'
-  }
-
-  // Get Age Limit
-  const getAge = (post) => {
-    const match = post.additionalDetails?.match(/Age Limit \(In Years\)(\d+)\s*-\s*(\d+)/)
-    return match ? `${match[1]}-${match[2]}` : 'N/A'
-  }
-
-  // Get Pay Level Number
-  const getPayLevel = (post) => {
-    const match = post.payScale?.match(/Level (\d+):/)
-    return match ? match[1] : 'N/A'
-  }
-
-  // Get Pay Scale Amount
-  const getPayScaleAmount = (post) => {
-    const amount = post.payScale?.split(': ')[1]
-    return amount || post.payScale || 'N/A'
-  }
-
-  // Get PWD Vacancies
-  const getPwdVacancies = (post) => {
-    const match = post.categoryWiseVacancy?.match(/Vacancy for PWDOH (\d+) HH (\d+) VH (\d+) Others (\d+)/)
-    return match ? { OH: match[1], HH: match[2], VH: match[3], Others: match[4] } : { OH: '0', HH: '0', VH: '0', Others: '0' }
-  }
-
-  // Get Category Wise Vacancy
-  const getCategoryVacancy = (post) => {
-    const match = post.categoryWiseVacancy?.match(/UR (\d+) ST (\d+) SC (\d+) OBC (\d+) EWS (\d+) Total(\d+)/)
-    if (match) {
-      return {
-        ur: match[1], st: match[2], sc: match[3], obc: match[4], ews: match[5], total: match[6],
-        esm: post.categoryWiseVacancy?.match(/ESM (\d+)/)?.[1] || '0'
-      }
+      setPosts(processedData);
+      setLoading(false);
+    } catch (err) {
+      console.error('Error processing data:', err);
+      setError('Failed to load posts data.');
+      setLoading(false);
     }
-    return { ur: '0', st: '0', sc: '0', obc: '0', ews: '0', total: '0', esm: '0' }
-  }
+  }, []);
 
-  // Filter logic
+  const getRegionFullName = (code) => {
+    const regionMap = {
+      'CR': 'Central Region', 'ER': 'Eastern Region', 'KKR': 'Karnataka Kerala Region',
+      'MPR': 'Madhya Pradesh Region', 'NER': 'North Eastern Region', 'NR': 'Northern Region',
+      'NWR': 'North Western Region', 'SR': 'Southern Region', 'WR': 'Western Region'
+    };
+    return regionMap[code] || code;
+  };
+
+  // Save cart
+  useEffect(() => {
+    localStorage.setItem('sscCart', JSON.stringify(cartItems));
+  }, [cartItems]);
+
+  // Reset page on filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filters]);
+
+  // Close filter panel on outside click
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (filterPanelRef.current && !filterPanelRef.current.contains(event.target) &&
+        !event.target.closest('.filter-btn')) {
+        setShowFilterPanel(false);
+      }
+    };
+    if (showFilterPanel) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showFilterPanel]);
+
+  // ==================== FILTERING LOGIC ====================
   const filteredPosts = useMemo(() => {
-    return selectionPostsData.filter(post => {
-      // Search term
+    return posts.filter(post => {
+      // Extensive search - checks ALL content
       if (searchTerm) {
-        const searchable = `${post.postName} ${post.postCode} ${post.departmentalDetails} ${post.region}`.toLowerCase()
-        if (!searchable.includes(searchTerm.toLowerCase())) return false
-      }
+        const searchLower = searchTerm.toLowerCase();
+        const searchWords = searchLower.split(/\s+/);
+        const searchableText = getSearchableText(post);
 
-      // Vacancy Category filter
-      if (filters.vacancyCategory) {
-        const vac = getCategoryVacancy(post)
-        const pwd = getPwdVacancies(post)
-
-        const categoryMap = {
-          'UR': parseInt(vac.ur) || 0,
-          'SC': parseInt(vac.sc) || 0,
-          'ST': parseInt(vac.st) || 0,
-          'OBC': parseInt(vac.obc) || 0,
-          'EWS': parseInt(vac.ews) || 0,
-          'ESM': parseInt(vac.esm) || 0,
-          'OH': parseInt(pwd.OH) || 0,
-          'HH': parseInt(pwd.HH) || 0,
-          'VH': parseInt(pwd.VH) || 0
+        // All search words must be found somewhere in the post
+        for (const word of searchWords) {
+          if (!searchableText.includes(word)) return false;
         }
-
-        const vacancyCount = categoryMap[filters.vacancyCategory]
-        if (vacancyCount === 0) return false
       }
 
       // Region filter
-      if (filters.region && post.region !== filters.region) return false
+      if (filters.region && post.region !== filters.region) return false;
 
       // Exam Level filter
-      if (filters.examLevel && getExamLevel(post) !== filters.examLevel) return false
+      if (filters.examLevel && post.examLevel !== filters.examLevel) return false;
 
       // Pay Level filter
-      if (filters.payLevel && getPayLevel(post) !== filters.payLevel.replace('Level ', '')) return false
+      if (filters.payLevel && post.payLevel !== filters.payLevel) return false;
 
-      // Skill Test filter
-      if (filters.skillTest && getSkillTest(post) !== filters.skillTest) return false
+      // Classification filter - partial match
+      if (filters.classification && !post.classification.toLowerCase().includes(filters.classification.toLowerCase())) return false;
 
-      // Ministry filter
-      if (filters.ministry) {
-        const postMinistry = post.departmentalDetails?.match(/Ministry Name(.+?)Department Name/)?.[1]?.trim()
-        if (postMinistry !== filters.ministry) return false
+      // Max Age filter - user's max age must be <= post's max age limit
+      if (filters.maxAge) {
+        const userMaxAge = parseInt(filters.maxAge);
+        if (userMaxAge > post.ageLimit.max) return false;
       }
 
       // Experience filter
-      if (filters.experience) {
-        const postHasExp = hasExperience(post)
-        if (filters.experience === 'With Experience' && !postHasExp) return false
-        if (filters.experience === 'No Experience' && postHasExp) return false
+// Experience filter
+if (filters.hasExperience === 'yes' && !post.experience) return false;
+if (filters.hasExperience === 'no' && post.experience) return false;
+
+      // Skill Test filter
+      if (filters.skillTest === 'yes' && post.skillTest !== 'Yes') return false;
+      if (filters.skillTest === 'no' && post.skillTest === 'Yes') return false;
+
+      // PWD Suitable filter
+      if (filters.pwdSuitable === 'yes' && post.pwdSuitable === 'No') return false;
+      if (filters.pwdSuitable === 'no' && post.pwdSuitable.includes('Yes')) return false;
+
+      // In the filteredPosts useMemo, add these conditions:
+      // Category vacancy filters
+      if (filters.showUR && post.ur === 0) return false;
+      if (filters.showSC && post.sc === 0) return false;
+      if (filters.showST && post.st === 0) return false;
+      if (filters.showOBC && post.obc === 0) return false;
+      if (filters.showEWS && post.ews === 0) return false;
+      if (filters.showESM && post.esm === 0) return false;
+
+      return true;
+    });
+  }, [posts, searchTerm, filters]);
+
+  // ==================== SORTING ====================
+  const sortedPosts = useMemo(() => {
+    const sorted = [...filteredPosts];
+    sorted.sort((a, b) => {
+      let aVal = a[sortConfig.key];
+      let bVal = b[sortConfig.key];
+
+      if (sortConfig.key === 'srNo') {
+        aVal = a.srNo;
+        bVal = b.srNo;
       }
 
-      return true
-    })
-  }, [searchTerm, filters])
+      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [filteredPosts, sortConfig]);
 
-  // Remove duplicates by postCode
-  const uniquePosts = useMemo(() => {
-    const seen = new Set()
-    return filteredPosts.filter(post => {
-      if (seen.has(post.postCode)) return false
-      seen.add(post.postCode)
-      return true
-    })
-  }, [filteredPosts])
+  // ==================== PAGINATION ====================
+  const totalPages = Math.ceil(sortedPosts.length / itemsPerPage);
+  const paginatedPosts = sortedPosts.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
-  // Pagination
-  const indexOfLastPost = currentPage * postsPerPage
-  const indexOfFirstPost = indexOfLastPost - postsPerPage
-  const currentPosts = uniquePosts.slice(indexOfFirstPost, indexOfLastPost)
-  const totalPages = Math.ceil(uniquePosts.length / postsPerPage)
+  // ==================== UNIQUE VALUES FOR FILTERS ====================
+  const filterOptions = useMemo(() => ({
+    regions: [...new Set(posts.map(p => p.region))].filter(Boolean).sort(),
+    examLevels: ['10th', '12th', 'Graduate', 'Other'],
+    payLevels: [...new Set(posts.map(p => p.payLevel))].filter(Boolean).sort((a, b) => {
+      const numA = parseInt(a.match(/\d+/)?.[0]) || 0;
+      const numB = parseInt(b.match(/\d+/)?.[0]) || 0;
+      return numA - numB;
+    }),
+    classifications: [...new Set(posts.map(p => p.classification))].filter(Boolean).sort(),
+  }), [posts]);
 
-  const paginate = (pageNumber) => {
-    setCurrentPage(pageNumber)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+  // ==================== HANDLERS ====================
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const addToCart = (post) => {
+    setCartItems(prev => {
+      if (prev.some(item => item.postCode === post.postCode)) return prev;
+      return [...prev, { ...post, cartId: Date.now() + Math.random() }];
+    });
+  };
+
+  const removeFromCart = (cartId) => {
+    setCartItems(prev => prev.filter(item => item.cartId !== cartId));
+  };
+
+  const clearCart = () => setCartItems([]);
+  const isInCart = (postCode) => cartItems.some(item => item.postCode === postCode);
+
+const resetFilters = () => {
+  setFilters({
+    region: '', examLevel: '', payLevel: '', classification: '',
+    maxAge: '', hasExperience: '', skillTest: '', pwdSuitable: '',
+    showUR: false, showSC: false, showST: false, showOBC: false, showEWS: false, showESM: false,
+  });
+  setSearchTerm('');
+  setCurrentPage(1);
+};
+
+const activeFilterCount = useMemo(() => {
+  let count = 0;
+  Object.values(filters).forEach(v => { 
+    if (v !== '' && v !== false) count++; 
+  });
+  if (searchTerm) count++;
+  return count;
+}, [filters, searchTerm]);
+
+  // ==================== PRINT FUNCTIONS ====================
+  const printPost = (post) => {
+    const printWindow = window.open('', '_blank');
+    const content = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>SSC Post - ${post.postName}</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: Arial, sans-serif; padding: 40px; max-width: 1000px; margin: 0 auto; background: #fff; }
+            .header { border-bottom: 3px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px; }
+            h1 { color: #1e1b4b; font-size: 28px; margin-bottom: 10px; }
+            .section { margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 12px; border-left: 4px solid #4f46e5; }
+            .section h2 { color: #4f46e5; font-size: 18px; margin-bottom: 20px; }
+            .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+            .label { font-size: 12px; text-transform: uppercase; color: #6b7280; font-weight: 600; }
+            .value { font-size: 16px; color: #1e1b4b; font-weight: 500; }
+            .education-content { white-space: pre-line; line-height: 1.6; }
+            .vacancy-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; }
+            .vacancy-card { background: white; padding: 20px; border-radius: 10px; text-align: center; }
+            .vacancy-value { font-size: 32px; font-weight: 700; color: #4f46e5; }
+            .total-box { background: #4f46e5; color: white; padding: 15px 25px; border-radius: 10px; display: inline-block; }
+            @media print { body { padding: 20px; } .no-print { display: none; } }
+            .print-btn { background: #4f46e5; color: white; border: none; padding: 12px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; margin-right: 10px; }
+            .close-btn { background: #6b7280; color: white; border: none; padding: 12px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>${post.postName}</h1>
+            <div>Post Code: ${post.postCode} | Region: ${post.region}</div>
+          </div>
+          <div class="section">
+            <h2>Basic Information</h2>
+            <div class="grid">
+              <div><span class="label">Department</span><div class="value">${post.department || 'N/A'}</div></div>
+              <div><span class="label">Ministry</span><div class="value">${post.ministry || 'N/A'}</div></div>
+              <div><span class="label">Age Limit</span><div class="value">${post.ageLimit.min} - ${post.ageLimit.max} years</div></div>
+              <div><span class="label">Pay Scale</span><div class="value">${post.payScale || 'N/A'}</div></div>
+              <div><span class="label">Classification</span><div class="value">${post.classification || 'N/A'}</div></div>
+              <div><span class="label">Gender</span><div class="value">${post.gender || 'All'}</div></div>
+              <div><span class="label">Skill Test</span><div class="value">${post.skillTest === 'Yes' ? 'Required' : 'Not Required'}</div></div>
+              <div><span class="label">PWD Suitable</span><div class="value">${post.pwdSuitable}</div></div>
+            </div>
+          </div>
+          <div class="section">
+            <h2>Educational Qualifications</h2>
+            <div class="value education-content">${post.fullEducation || 'N/A'}</div>
+            ${post.experience > 0 ? `<div style="margin-top: 15px;"><span class="label">Experience Required</span><div class="value">${post.experience} year${post.experience > 1 ? 's' : ''}</div></div>` : ''}
+          </div>
+          <div class="section">
+            <h2>Vacancy Details</h2>
+            <div class="vacancy-grid">
+              <div class="vacancy-card"><div>UR</div><div class="vacancy-value">${post.ur}</div></div>
+              <div class="vacancy-card"><div>SC</div><div class="vacancy-value">${post.sc}</div></div>
+              <div class="vacancy-card"><div>ST</div><div class="vacancy-value">${post.st}</div></div>
+              <div class="vacancy-card"><div>OBC</div><div class="vacancy-value">${post.obc}</div></div>
+              <div class="vacancy-card"><div>EWS</div><div class="vacancy-value">${post.ews}</div></div>
+            </div>
+            <div class="total-box"><strong>Total Vacancies: ${post.total}</strong>${post.esm > 0 ? ` | ESM: ${post.esm}` : ''}</div>
+          </div>
+          <div class="no-print" style="text-align: center; margin-top: 30px;">
+            <button class="print-btn" onclick="window.print()">🖨️ Print</button>
+            <button class="close-btn" onclick="window.close()">✕ Close</button>
+          </div>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(content);
+    printWindow.document.close();
+  };
+
+  const printCart = () => {
+    const printWindow = window.open('', '_blank');
+    const totalVacancies = cartItems.reduce((sum, item) => sum + item.total, 0);
+    const content = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>SSC Selection Posts - Saved Posts</title>
+          <style>
+            * { margin: 0; padding: 0; }
+            body { font-family: Arial, sans-serif; padding: 40px; max-width: 1200px; margin: 0 auto; }
+            h1 { color: #1e1b4b; }
+            table { width: 100%; border-collapse: collapse; margin: 30px 0; }
+            th { background: #4f46e5; color: white; padding: 15px; text-align: left; }
+            td { padding: 12px 15px; border-bottom: 1px solid #e5e7eb; }
+            @media print { .no-print { display: none; } }
+            .print-btn { background: #4f46e5; color: white; border: none; padding: 12px 30px; border-radius: 8px; cursor: pointer; }
+          </style>
+        </head>
+        <body>
+          <h1>📋 SSC Selection Posts - Saved Posts (${cartItems.length} posts, ${totalVacancies} total vacancies)</h1>
+          <table>
+            <thead><tr><th>#</th><th>Post Code</th><th>Post Name</th><th>Department</th><th>Region</th><th>Total</th></tr></thead>
+            <tbody>
+              ${cartItems.map((item, idx) => `<tr><td>${idx + 1}</td><td>${item.postCode}</td><td>${item.postName}</td><td>${item.department || 'N/A'}</td><td>${item.region}</td><td>${item.total}</td></tr>`).join('')}
+            </tbody>
+          </table>
+          <div class="no-print" style="text-align: center;">
+            <button class="print-btn" onclick="window.print()">🖨️ Print</button>
+            <button onclick="window.close()" style="margin-left: 10px; padding: 12px 30px; border-radius: 8px; cursor: pointer;">✕ Close</button>
+          </div>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(content);
+    printWindow.document.close();
+  };
+
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) pages.push(i);
+        pages.push('...'); pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1); pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) pages.push(i);
+      } else {
+        pages.push(1); pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) pages.push(i);
+        pages.push('...'); pages.push(totalPages);
+      }
+    }
+    return pages;
+  };
+
+  // ==================== LOADING STATE ====================
+  if (loading) {
+    return (
+      <div className="selection-posts-page">
+        <div className="container">
+          <div className="loading-container">
+            <div className="loading-spinner"></div>
+            <p className="loading-text">Loading SSC Selection Posts...</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  const clearFilters = () => {
-    setFilters({
-      region: '',
-      examLevel: '',
-      payLevel: '',
-      skillTest: '',
-      ministry: '',
-      experience: '',
-      vacancyCategory: ''
-    })
-    setSearchTerm('')
-  }
-
-  const getDepartmentName = (post) => {
-    return post.departmentalDetails?.match(/Department Name(.+?)Office Name/)?.[1]?.trim() ||
-      post.departmentalDetails?.match(/Ministry Name(.+?)Department Name/)?.[1]?.trim() ||
-      'N/A'
-  }
-
+  // ==================== RENDER ====================
   return (
     <div className="selection-posts-page">
       <div className="container">
-        {/* Header */}
+        {/* HEADER */}
         <div className="page-header">
-          <span className="section-badge">
-            <Briefcase size={16} /> Phase-XIV/2026
-          </span>
-          <h1 className="page-title">SSC Selection Posts</h1>
-          <p className="page-subtitle">{uniquePosts.length} Vacancies Available</p>
-          <div className="cart-header">
-            <p className="page-subtitle">{uniquePosts.length} Vacancies Available</p>
-            <button
-              className={`cart-toggle-btn ${cartPosts.length > 0 ? 'has-items' : ''}`}
-              onClick={() => setShowCart(!showCart)}
-            >
-              <Briefcase size={18} />
-              My List
-              {cartPosts.length > 0 && <span className="cart-count">{cartPosts.length}</span>}
-            </button>
-          </div>
-        </div>
-
-
-
-        {/* Search and Filter Bar */}
-        <div className="search-filter-section">
-          <div className="search-bar-wrapper">
-            <Search size={20} className="search-icon" />
-            <input
-              type="text"
-              placeholder="Search by Post Name, Code, or Department..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="search-input"
-            />
-          </div>
-          <div className="filter-actions">
-            <button
-              className={`filter-btn ${showFilters ? 'active' : ''}`}
-              onClick={() => setShowFilters(!showFilters)}
-            >
-              <Filter size={18} /> Filters
-              {Object.values(filters).some(v => v) && (
-                <span className="filter-count">{Object.values(filters).filter(Boolean).length}</span>
-              )}
-            </button>
-            {Object.values(filters).some(v => v) && (
-              <button className="clear-btn" onClick={clearFilters}>Clear All</button>
-            )}
-          </div>
-        </div>
-
-        {/* Filter Panel */}
-        {showFilters && (
-          <div className="filter-panel">
-            <div className="filter-grid">
-
-              <div className="filter-group">
-                <label>Vacancy Available For</label>
-                <select
-                  value={filters.vacancyCategory}
-                  onChange={(e) => setFilters({ ...filters, vacancyCategory: e.target.value })}
-                >
-                  <option value="">All Categories</option>
-                  <option value="UR">UR (General)</option>
-                  <option value="SC">SC</option>
-                  <option value="ST">ST</option>
-                  <option value="OBC">OBC</option>
-                  <option value="EWS">EWS</option>
-                  <option value="ESM">ESM (Ex-Serviceman)</option>
-                  <option value="OH">OH (Orthopedic)</option>
-                  <option value="HH">HH (Hearing)</option>
-                  <option value="VH">VH (Visual)</option>
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Region</label>
-                <select value={filters.region} onChange={(e) => setFilters({ ...filters, region: e.target.value })}>
-                  <option value="">All Regions</option>
-                  {regions.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Exam Level</label>
-                <select value={filters.examLevel} onChange={(e) => setFilters({ ...filters, examLevel: e.target.value })}>
-                  <option value="">All Levels</option>
-                  {examLevels.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Pay Level</label>
-                <select value={filters.payLevel} onChange={(e) => setFilters({ ...filters, payLevel: e.target.value })}>
-                  <option value="">All Pay Levels</option>
-                  {payLevels.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Skill Test Required</label>
-                <select value={filters.skillTest} onChange={(e) => setFilters({ ...filters, skillTest: e.target.value })}>
-                  <option value="">All</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Experience Required</label>
-                <select value={filters.experience} onChange={(e) => setFilters({ ...filters, experience: e.target.value })}>
-                  <option value="">All</option>
-                  <option value="No Experience">No Experience</option>
-                  <option value="With Experience">With Experience</option>
-                </select>
-              </div>
-
-              <div className="filter-group">
-                <label>Ministry/Department</label>
-                <select value={filters.ministry} onChange={(e) => setFilters({ ...filters, ministry: e.target.value })}>
-                  <option value="">All Ministries</option>
-                  {ministries.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
+          <div className="header-top">
+            <div className="header-badge"><span>📋</span><span>SSC Phase-XIV/2026</span></div>
+            <div className="header-stats">
+              <span className="stat-item">📊 {posts.length} Total Posts</span>
+              <span className="stat-item">🗺️ 9 Regions</span>
             </div>
           </div>
-        )}
+          <div className="header-main">
+            <div>
+              <h1 className="page-title">Selection Posts</h1>
+              <p className="page-subtitle">Browse and filter available positions</p>
+            </div>
+            <div className="header-actions">
+              <button className={`cart-toggle-btn ${cartItems.length > 0 ? 'has-items' : ''}`} onClick={() => setShowCart(!showCart)}>
+                <span>🛒</span><span>My Cart</span>
+                {cartItems.length > 0 && <span className="cart-count">{cartItems.length}</span>}
+              </button>
+            </div>
+          </div>
+        </div>
 
-        {/* Cart Panel */}
+        {/* CART PANEL */}
         {showCart && (
           <div className="cart-panel">
             <div className="cart-header-bar">
-              <h3>My Selected Posts ({cartPosts.length})</h3>
+              <h3><span>📌</span> Saved Posts ({cartItems.length})</h3>
               <div className="cart-actions">
-                {cartPosts.length > 0 && (
+                {cartItems.length > 0 && (
                   <>
-                    <button className="cart-print-btn" onClick={printCart}>
-                      <Download size={16} /> Print / PDF
-                    </button>
-                    <button className="cart-clear-btn" onClick={clearCart}>
-                      Clear All
-                    </button>
+                    <button className="cart-print-btn" onClick={printCart}><span>🖨️</span> Print</button>
+                    <button className="cart-clear-btn" onClick={clearCart}>Clear All</button>
                   </>
                 )}
-                <button className="cart-close-btn" onClick={() => setShowCart(false)}>
-                  <X size={18} />
-                </button>
+                <button className="cart-close-btn" onClick={() => setShowCart(false)}>✕</button>
               </div>
             </div>
-
-            {cartPosts.length === 0 ? (
-              <div className="cart-empty">
-                <p>No posts added yet. Click "Add to List" on any post to save it here.</p>
-              </div>
+            {cartItems.length === 0 ? (
+              <div className="cart-empty"><span className="empty-icon">🛒</span><p>Your cart is empty</p></div>
             ) : (
               <div className="cart-items">
-                {cartPosts.map((post, index) => {
-                  const vac = getCategoryVacancy(post)
-                  return (
-                    <div key={post.postCode} className="cart-item">
-                      <span className="cart-item-sno">{index + 1}.</span>
-                      <div className="cart-item-details">
-                        <span className="cart-item-name">{post.postName}</span>
-                        <span className="cart-item-meta">{post.postCode} | {post.region} | L{getPayLevel(post)} | Total: {vac.total}</span>
-                      </div>
-                      <button
-                        className="cart-item-remove"
-                        onClick={() => removeFromCart(post.postCode)}
-                      >
-                        <X size={14} />
-                      </button>
+                {cartItems.map((item, idx) => (
+                  <div key={item.cartId} className="cart-item">
+                    <span className="cart-item-sno">{idx + 1}.</span>
+                    <div className="cart-item-details">
+                      <span className="cart-item-name">{item.postName}</span>
+                      <span className="cart-item-meta">{item.postCode} • {item.regionCode}</span>
                     </div>
-                  )
-                })}
+                    <button className="cart-item-remove" onClick={() => removeFromCart(item.cartId)}>✕</button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
-        {/* Results Summary */}
-        <div className="results-summary">
-          <span>
-            Showing <strong>{indexOfFirstPost + 1}-{Math.min(indexOfLastPost, uniquePosts.length)}</strong> of <strong>{uniquePosts.length}</strong> posts
-          </span>
-          <button className="export-btn">
-            <Download size={16} /> Export List
-          </button>
+        {/* SEARCH AND FILTER */}
+        <div className="search-filter-section">
+          <div className="search-bar-wrapper">
+            <span className="search-icon">🔍</span>
+            <input type="text" className="search-input" placeholder="Search by any keyword (post name, code, department, education, etc.)" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            {searchTerm && <button className="search-clear" onClick={() => setSearchTerm('')}>✕</button>}
+          </div>
+          <div className="filter-actions">
+            <button className={`filter-btn ${showFilterPanel ? 'active' : ''}`} onClick={() => setShowFilterPanel(!showFilterPanel)}>
+              <span>⚙️</span><span>Filters</span>
+              {activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}
+            </button>
+            <button className="clear-btn" onClick={resetFilters}>Clear</button>
+          </div>
         </div>
 
-        {/* Table View */}
+        {/* FILTER PANEL */}
+        {showFilterPanel && (
+          <div className="filter-panel" ref={filterPanelRef}>
+            <div className="filter-panel-header">
+              <h3>Advanced Filters</h3>
+            </div>
+            <div className="filter-grid">
+              <div className="filter-group">
+                <label>🌍 Region</label>
+                <select value={filters.region} onChange={(e) => setFilters({ ...filters, region: e.target.value })}>
+                  <option value="">All Regions (9)</option>
+                  {filterOptions.regions.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>📚 Exam Level</label>
+                <select value={filters.examLevel} onChange={(e) => setFilters({ ...filters, examLevel: e.target.value })}>
+                  <option value="">All Levels</option>
+                  <option value="10th">10th / Matriculation</option>
+                  <option value="12th">12th / Higher Secondary</option>
+                  <option value="Graduate">Graduate & Above</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>💰 Pay Level</label>
+                <select value={filters.payLevel} onChange={(e) => setFilters({ ...filters, payLevel: e.target.value })}>
+                  <option value="">All Pay Levels (1-8)</option>
+                  {filterOptions.payLevels.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>🏛️ Classification</label>
+                <select value={filters.classification} onChange={(e) => setFilters({ ...filters, classification: e.target.value })}>
+                  <option value="">All Classifications</option>
+                  {filterOptions.classifications.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>📅 Your Max Age</label>
+                <input type="number" placeholder="e.g., 27" min="18" max="50" value={filters.maxAge} onChange={(e) => setFilters({ ...filters, maxAge: e.target.value })} className="filter-input" />
+                <small style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Shows posts where max age ≥ your age</small>
+              </div>
+              <div className="filter-group">
+                <label>💼 Experience</label>
+                <select value={filters.hasExperience} onChange={(e) => setFilters({ ...filters, hasExperience: e.target.value })}>
+                  <option value="">Any</option>
+                  <option value="yes">Required</option>
+                  <option value="no">Not Required</option>
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>⌨️ Skill Test</label>
+                <select value={filters.skillTest} onChange={(e) => setFilters({ ...filters, skillTest: e.target.value })}>
+                  <option value="">Any</option>
+                  <option value="yes">Required</option>
+                  <option value="no">Not Required</option>
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>♿ PWD Suitable</label>
+                <select value={filters.pwdSuitable} onChange={(e) => setFilters({ ...filters, pwdSuitable: e.target.value })}>
+                  <option value="">Any</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+            </div>
+            {/* CATEGORY FILTER SECTION */}
+            <div className="filter-section">
+              <label className="filter-section-label">📊 Show posts with vacancies in:</label>
+              <div className="category-filter-group">
+                <label className="category-filter-item ur-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showUR}
+                    onChange={(e) => setFilters({ ...filters, showUR: e.target.checked })}
+                  />
+                  <span>UR</span>
+                </label>
+                <label className="category-filter-item sc-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showSC}
+                    onChange={(e) => setFilters({ ...filters, showSC: e.target.checked })}
+                  />
+                  <span>SC</span>
+                </label>
+                <label className="category-filter-item st-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showST}
+                    onChange={(e) => setFilters({ ...filters, showST: e.target.checked })}
+                  />
+                  <span>ST</span>
+                </label>
+                <label className="category-filter-item obc-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showOBC}
+                    onChange={(e) => setFilters({ ...filters, showOBC: e.target.checked })}
+                  />
+                  <span>OBC</span>
+                </label>
+                <label className="category-filter-item ews-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showEWS}
+                    onChange={(e) => setFilters({ ...filters, showEWS: e.target.checked })}
+                  />
+                  <span>EWS</span>
+                </label>
+                <label className="category-filter-item esm-filter">
+                  <input
+                    type="checkbox"
+                    checked={filters.showESM}
+                    onChange={(e) => setFilters({ ...filters, showESM: e.target.checked })}
+                  />
+                  <span>ESM</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* RESULTS SUMMARY */}
+{/* RESULTS SUMMARY */}
+<div className="results-summary">
+  <div className="results-info">
+    <span className="results-count">
+      Showing <strong>{filteredPosts.length}</strong> of <strong>{posts.length}</strong> posts
+    </span>
+    <span className="results-vacancy-total">
+      • <strong>{filteredPosts.reduce((sum, p) => sum + p.total, 0).toLocaleString()}</strong> vacancies
+    </span>
+    {activeFilterCount > 0 && (
+      <span className="results-filtered">(filtered)</span>
+    )}
+  </div>
+  
+  {/* Category Stats */}
+  <div className="category-stats">
+    <span className="category-stat ur">
+      <span>UR:</span>
+      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ur, 0)}</span>
+    </span>
+    <span className="category-stat sc">
+      <span>SC:</span>
+      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.sc, 0)}</span>
+    </span>
+    <span className="category-stat st">
+      <span>ST:</span>
+      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.st, 0)}</span>
+    </span>
+    <span className="category-stat obc">
+      <span>OBC:</span>
+      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.obc, 0)}</span>
+    </span>
+    <span className="category-stat ews">
+      <span>EWS:</span>
+      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ews, 0)}</span>
+    </span>
+  </div>
+</div>
+
+        {/* TABLE VIEW */}
         <div className="table-container">
           <table className="posts-table">
             <thead>
               <tr>
-                <th>View</th>
-                <th>S.No</th>
-                <th>Region</th>
-                <th>Post Code</th>
-                <th>Post Name</th>
-                <th>Department</th>
-                <th>Age</th>
-                <th>Pay</th>
-                <th>Level</th>
-                <th>Exp</th>
-                <th>SC</th>
-                <th>ST</th>
-                <th>OBC</th>
-                <th>UR</th>
-                <th>EWS</th>
-                <th>Total</th>
-                <th>ESM</th>
-                <th>OH</th>
-                <th>HH</th>
-                <th>VH</th>
-                <th>Others</th>
+                <th onClick={() => handleSort('srNo')} className="sortable" style={{ width: '50px' }}>S.No {sortConfig.key === 'srNo' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th style={{ width: '70px' }}>Region</th>
+                <th style={{ width: '90px' }}>Post Code</th>
+                <th style={{ minWidth: '200px' }}>Post Name</th>
+                <th style={{ minWidth: '180px' }}>Department</th>
+                <th style={{ width: '70px' }}>Age</th>
+                <th style={{ width: '80px' }}>Pay</th>
+                <th style={{ minWidth: '200px' }}>Exam Eligibility</th>
+                <th style={{ width: '55px' }}>Skill</th>
+                <th style={{ width: '55px' }}>Exp</th>
+                <th style={{ width: '45px' }}>UR</th>
+                <th style={{ width: '45px' }}>SC</th>
+                <th style={{ width: '45px' }}>ST</th>
+                <th style={{ width: '45px' }}>OBC</th>
+                <th style={{ width: '45px' }}>EWS</th>
+                <th style={{ width: '55px' }}>Total</th>
+                <th style={{ width: '90px' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {currentPosts.map((post, index) => {
-                const vac = getCategoryVacancy(post)
-                const pwd = getPwdVacancies(post)
-
-                return (
-                  <tr key={post.postCode} onClick={() => setSelectedPost(post)}>
+              {paginatedPosts.length === 0 ? (
+                <tr><td colSpan="17" className="no-results-cell"><div className="no-results"><span className="no-results-icon">🔍</span><h3>No posts found</h3></div></td></tr>
+              ) : (
+                paginatedPosts.map((post) => (
+                  <tr key={post.postCode}>
+                    <td style={{ textAlign: 'center', fontWeight: '600' }}>{post.srNo}</td>
+                    <td><span className="region-badge">{post.regionCode}</span></td>
+                    <td><span className="post-code">{post.postCode}</span></td>
+                    <td><span className="post-name" title={post.postName}>{post.postName}</span></td>
+                    <td><span className="dept-name" title={post.department}>{post.department || '—'}</span></td>
+                    <td>{post.ageLimit.min}-{post.ageLimit.max}</td>
+                    <td><span className="pay-scale">{post.payLevel || '—'}</span></td>
+                    <td>
+                      <span className="exam-details">
+                        <span className={`exam-level-badge level-${post.examLevel?.toLowerCase()}`}>{post.examLevel}</span>
+                        <span className="exam-preview" title={post.fullEducation}>{post.fullEducation.substring(0, 50)}{post.fullEducation.length > 50 ? '...' : ''}</span>
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span className={`skill-badge ${post.skillTest === 'Yes' ? 'skill-yes' : 'skill-no'}`}>{post.skillTest === 'Yes' ? '✓' : '—'}</span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+  <span className={`exp-badge ${post.experience ? 'has-exp' : 'no-exp'}`}>
+    {post.experience ? 'Yes' : 'No'}
+  </span>
+</td>
+                    <td className={`vac-cell ${post.ur > 0 ? 'has-vacancy' : ''}`}>{post.ur || '—'}</td>
+                    <td className={`vac-cell ${post.sc > 0 ? 'has-vacancy' : ''}`}>{post.sc || '—'}</td>
+                    <td className={`vac-cell ${post.st > 0 ? 'has-vacancy' : ''}`}>{post.st || '—'}</td>
+                    <td className={`vac-cell ${post.obc > 0 ? 'has-vacancy' : ''}`}>{post.obc || '—'}</td>
+                    <td className={`vac-cell ${post.ews > 0 ? 'has-vacancy' : ''}`}>{post.ews || '—'}</td>
+                    <td className="vac-cell total-cell"><strong>{post.total}</strong></td>
                     <td>
                       <div className="table-actions">
-                        <button
-                          className="view-btn"
-                          onClick={(e) => { e.stopPropagation(); setSelectedPost(post); }}
-                          title="View Details"
-                        >
-                          <Eye size={16} />
+                        <button className="action-btn view-btn" onClick={() => { setSelectedPost(post); setShowModal(true); }} title="View">👁️</button>
+                        <button className={`action-btn cart-add-btn ${isInCart(post.postCode) ? 'added' : ''}`} onClick={() => addToCart(post)} title={isInCart(post.postCode) ? 'In cart' : 'Add'}>
+                          {isInCart(post.postCode) ? '✓' : '🛒'}
                         </button>
-                        <button
-                          className={`add-cart-btn ${isInCart(post.postCode) ? 'added' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            isInCart(post.postCode) ? removeFromCart(post.postCode) : addToCart(post);
-                          }}
-                          title={isInCart(post.postCode) ? "Remove from List" : "Add to List"}
-                        >
-                          {isInCart(post.postCode) ? '✓' : '+'}
-                        </button>
+                        <button className="action-btn print-btn" onClick={() => printPost(post)} title="Print">🖨️</button>
                       </div>
                     </td>
-                    <td>{indexOfFirstPost + index + 1}</td>
-                    <td><span className="region-badge">{post.region?.substring(0, 3)}</span></td>
-                    <td><span className="post-code">{post.postCode}</span></td>
-                    <td className="post-name">{post.postName}</td>
-                    <td className="dept-name">{getDepartmentName(post)}</td>
-                    <td>{getAge(post)}</td>
-                    <td><span className="pay-scale">{getPayScaleAmount(post)}</span></td>
-                    <td>L{getPayLevel(post)}</td>
-                    <td className={hasExperience(post) ? 'exp-yes' : 'exp-no'}>{getExperienceDisplay(post)}</td>
-                    <td className={`vac-cell ${vac.sc !== '0' ? 'has-vacancy' : ''}`}>{vac.sc}</td>
-                    <td className={`vac-cell ${vac.st !== '0' ? 'has-vacancy' : ''}`}>{vac.st}</td>
-                    <td className={`vac-cell ${vac.obc !== '0' ? 'has-vacancy' : ''}`}>{vac.obc}</td>
-                    <td className={`vac-cell ${vac.ur !== '0' ? 'has-vacancy' : ''}`}>{vac.ur}</td>
-                    <td className={`vac-cell ${vac.ews !== '0' ? 'has-vacancy' : ''}`}>{vac.ews}</td>
-                    <td className="vac-cell total-cell">{vac.total}</td>
-                    <td className={`vac-cell ${vac.esm !== '0' ? 'has-vacancy' : ''}`}>{vac.esm}</td>
-                    <td className={`vac-cell ${pwd.OH !== '0' ? 'has-vacancy' : ''}`}>{pwd.OH}</td>
-                    <td className={`vac-cell ${pwd.HH !== '0' ? 'has-vacancy' : ''}`}>{pwd.HH}</td>
-                    <td className={`vac-cell ${pwd.VH !== '0' ? 'has-vacancy' : ''}`}>{pwd.VH}</td>
-                    <td className={`vac-cell ${pwd.Others !== '0' ? 'has-vacancy' : ''}`}>{pwd.Others}</td>
                   </tr>
-                )
-              })}
+                ))
+              )}
             </tbody>
           </table>
         </div>
 
-        {/* Pagination */}
+        {/* PAGINATION */}
         {totalPages > 1 && (
           <div className="pagination">
-            <button
-              className="pagination-btn"
-              onClick={() => paginate(currentPage - 1)}
-              disabled={currentPage === 1}
-            >
-              Previous
-            </button>
+            <button className="pagination-btn prev" disabled={currentPage === 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>← Previous</button>
             <div className="pagination-numbers">
-              {[...Array(totalPages)].map((_, i) => {
-                if (i + 1 === 1 || i + 1 === totalPages || (i + 1 >= currentPage - 2 && i + 1 <= currentPage + 2)) {
-                  return (
-                    <button
-                      key={i}
-                      className={`pagination-number ${currentPage === i + 1 ? 'active' : ''}`}
-                      onClick={() => paginate(i + 1)}
-                    >
-                      {i + 1}
-                    </button>
-                  )
-                } else if (i + 1 === currentPage - 3 || i + 1 === currentPage + 3) {
-                  return <span key={i} className="pagination-ellipsis">...</span>
-                }
-                return null
-              })}
+              {getPageNumbers().map((page, idx) => (
+                page === '...' ? <span key={idx} className="pagination-ellipsis">...</span> :
+                  <button key={page} className={`pagination-number ${currentPage === page ? 'active' : ''}`} onClick={() => setCurrentPage(page)}>{page}</button>
+              ))}
             </div>
-            <button
-              className="pagination-btn"
-              onClick={() => paginate(currentPage + 1)}
-              disabled={currentPage === totalPages}
-            >
-              Next
-            </button>
+            <button className="pagination-btn next" disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}>Next →</button>
           </div>
         )}
 
-        {/* Detailed Modal */}
-        {selectedPost && (
-          <div className="modal-overlay" onClick={() => setSelectedPost(null)}>
+        {/* MODAL */}
+        {showModal && selectedPost && (
+          <div className="modal-overlay" onClick={() => setShowModal(false)}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
-                <h2>{selectedPost.postName}</h2>
-                <button className="modal-close" onClick={() => setSelectedPost(null)}>
-                  <X size={24} />
-                </button>
+                <div>
+                  <span className="modal-badge">{selectedPost.region}</span>
+                  <h2>{selectedPost.postName}</h2>
+                  <p className="modal-subtitle">Post Code: {selectedPost.postCode}</p>
+                </div>
+                <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
               </div>
               <div className="modal-body">
                 <div className="detail-grid">
-                  <div className="detail-item"><label>Post Code</label><span>{selectedPost.postCode}</span></div>
-                  <div className="detail-item"><label>Region</label><span>{selectedPost.region}</span></div>
-                  <div className="detail-item"><label>Pay Scale</label><span>{selectedPost.payScale}</span></div>
-                  <div className="detail-item"><label>Age Limit</label><span>{getAge(selectedPost)} years</span></div>
-                  <div className="detail-item"><label>Skill Test</label><span>{getSkillTest(selectedPost)}</span></div>
-                  <div className="detail-item"><label>Experience Required</label><span>{getExperienceDisplay(selectedPost)}</span></div>
-                  <div className="detail-item full-width"><label>Department</label><span>{selectedPost.departmentalDetails}</span></div>
-                  <div className="detail-item full-width"><label>Education</label><span>{selectedPost.educationDetails}</span></div>
-                  <div className="detail-item full-width"><label>Additional Details</label><span>{selectedPost.additionalDetails}</span></div>
+                  <div className="detail-item"><label>Department</label><span>{selectedPost.department || 'N/A'}</span></div>
+                  <div className="detail-item"><label>Ministry</label><span>{selectedPost.ministry || 'N/A'}</span></div>
+                  <div className="detail-item"><label>Age Limit</label><span>{selectedPost.ageLimit.min} - {selectedPost.ageLimit.max} years</span></div>
+                  <div className="detail-item"><label>Pay Scale</label><span>{selectedPost.payScale || 'N/A'}</span></div>
+                  <div className="detail-item"><label>Classification</label><span>{selectedPost.classification || 'N/A'}</span></div>
+                  <div className="detail-item"><label>Gender</label><span>{selectedPost.gender || 'All'}</span></div>
+                  <div className="detail-item"><label>Skill Test</label><span>{selectedPost.skillTest === 'Yes' ? 'Required' : 'Not Required'}</span></div>
+                  <div className="detail-item"><label>PWD Suitable</label><span>{selectedPost.pwdSuitable}</span></div>
                 </div>
-
-                <div className="vacancy-detail-section">
-                  <h3>Category-wise Vacancy</h3>
-                  <div className="vacancy-grid">
-                    {Object.entries(getCategoryVacancy(selectedPost)).map(([k, v]) => (
-                      <div key={k} className="vacancy-card">
-                        <span className="cat-label">{k.toUpperCase()}</span>
-                        <span className="cat-value">{v}</span>
-                      </div>
-                    ))}
-                    <div className="vacancy-card"><span className="cat-label">OH</span><span className="cat-value">{getPwdVacancies(selectedPost).OH}</span></div>
-                    <div className="vacancy-card"><span className="cat-label">HH</span><span className="cat-value">{getPwdVacancies(selectedPost).HH}</span></div>
-                    <div className="vacancy-card"><span className="cat-label">VH</span><span className="cat-value">{getPwdVacancies(selectedPost).VH}</span></div>
-                    <div className="vacancy-card"><span className="cat-label">Others</span><span className="cat-value">{getPwdVacancies(selectedPost).Others}</span></div>
+                <div className="detail-section">
+                  <h3>Educational Qualifications</h3>
+                  <div className="education-content" style={{ whiteSpace: 'pre-line' }}>{selectedPost.fullEducation || 'N/A'}</div>
+                  {selectedPost.experience > 0 && <p className="experience-note"><strong>Experience Required:</strong> {selectedPost.experience} year{selectedPost.experience > 1 ? 's' : ''}</p>}
+                </div>
+                <div className="detail-section">
+                  <h3>Vacancy Details</h3>
+                  <div className="vacancy-detail-grid">
+                    <div className="vacancy-detail-card ur"><span className="cat-label">UR</span><span className="cat-value">{selectedPost.ur}</span></div>
+                    <div className="vacancy-detail-card sc"><span className="cat-label">SC</span><span className="cat-value">{selectedPost.sc}</span></div>
+                    <div className="vacancy-detail-card st"><span className="cat-label">ST</span><span className="cat-value">{selectedPost.st}</span></div>
+                    <div className="vacancy-detail-card obc"><span className="cat-label">OBC</span><span className="cat-value">{selectedPost.obc}</span></div>
+                    <div className="vacancy-detail-card ews"><span className="cat-label">EWS</span><span className="cat-value">{selectedPost.ews}</span></div>
+                    <div className="vacancy-detail-card total"><span className="cat-label">Total</span><span className="cat-value">{selectedPost.total}</span></div>
                   </div>
+                  {(selectedPost.esm > 0 || selectedPost.pwdOh > 0 || selectedPost.pwdHh > 0 || selectedPost.pwdVh > 0) && (
+                    <div className="horizontal-vacancies">
+                      <h4>Horizontal Reservations</h4>
+                      <div className="horizontal-grid">
+                        {selectedPost.esm > 0 && <span className="horizontal-badge esm">ESM: {selectedPost.esm}</span>}
+                        {selectedPost.pwdOh > 0 && <span className="horizontal-badge oh">OH: {selectedPost.pwdOh}</span>}
+                        {selectedPost.pwdHh > 0 && <span className="horizontal-badge hh">HH: {selectedPost.pwdHh}</span>}
+                        {selectedPost.pwdVh > 0 && <span className="horizontal-badge vh">VH: {selectedPost.pwdVh}</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="modal-footer">
-                <button className="btn btn-primary">
-                  <ExternalLink size={16} /> Official Notification
+                <button className="modal-btn secondary" onClick={() => setShowModal(false)}>Close</button>
+                <button className="modal-btn primary" onClick={() => { addToCart(selectedPost); setShowModal(false); }}>
+                  🛒 {isInCart(selectedPost.postCode) ? 'Already in Cart' : 'Add to Cart'}
                 </button>
-                <button className="btn btn-outline" onClick={() => setSelectedPost(null)}>Close</button>
+                <button className="modal-btn print" onClick={() => printPost(selectedPost)}>🖨️ Print</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* No Results */}
-        {uniquePosts.length === 0 && (
-          <div className="no-results">
-            <Briefcase size={48} />
-            <h3>No posts found</h3>
-            <p>Try adjusting your filters or search term</p>
-            <button className="btn btn-primary" onClick={clearFilters}>Clear All Filters</button>
-          </div>
-        )}
-
-        {/* Disclaimer */}
+        {/* DISCLAIMER */}
         <div className="disclaimer-banner">
-          <AlertCircle size={16} />
-          <span>For reference only. Verify all details on </span>
-          <a href="https://ssc.gov.in" target="_blank" rel="noopener noreferrer">
-            ssc.gov.in <ExternalLink size={12} />
-          </a>
+          <span>ℹ️</span>
+          <span>Data from SSC Phase-XIV/2026. Verify with official website.</span>
+          <a href="https://ssc.gov.in" target="_blank" rel="noopener noreferrer">ssc.gov.in ↗️</a>
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default SelectionPosts
+export default SelectionPosts;
