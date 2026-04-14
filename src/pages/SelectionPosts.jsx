@@ -2,20 +2,16 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import './SelectionPosts.css';
 
-// Import both JSON files
 import rawPostsData from '../data/sppivraw.json';
 import detailedPostsData from '../data/sppiv.json';
 
 const SelectionPosts = () => {
-  // ==================== STATE MANAGEMENT ====================
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilterPanel, setShowFilterPanel] = useState(false);
-  // Update filter state - add category vacancy filters
   const [filters, setFilters] = useState({
     region: '',
     examLevel: '',
@@ -25,7 +21,6 @@ const SelectionPosts = () => {
     hasExperience: '',
     skillTest: '',
     pwdSuitable: '',
-    // Category vacancy filters
     showUR: false,
     showSC: false,
     showST: false,
@@ -33,14 +28,13 @@ const SelectionPosts = () => {
     showEWS: false,
     showESM: false,
   });
-  // Cart state
+
   const [cartItems, setCartItems] = useState(() => {
     const saved = localStorage.getItem('sscCart');
     return saved ? JSON.parse(saved) : [];
   });
   const [showCart, setShowCart] = useState(false);
 
-  // UI states
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedPost, setSelectedPost] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -49,28 +43,38 @@ const SelectionPosts = () => {
 
   const filterPanelRef = useRef(null);
 
-  // ==================== HELPER FUNCTIONS ====================
+  const getRegionFullName = (code) => {
+    const regionMap = {
+      'CR': 'Central Region', 'ER': 'Eastern Region', 'KKR': 'Karnataka Kerala Region',
+      'MPR': 'Madhya Pradesh Region', 'NER': 'North Eastern Region', 'NR': 'Northern Region',
+      'NWR': 'North Western Region', 'SR': 'Southern Region', 'WR': 'Western Region'
+    };
+    return regionMap[code] || code;
+  };
+
+  const getRegionCode = (region) => {
+    const regionMap = {
+      'Central Region': 'CR',
+      'Eastern Region': 'ER',
+      'Karnataka Kerala Region': 'KKR',
+      'Madhya Pradesh Region': 'MPR',
+      'North Eastern Region': 'NER',
+      'Northern Region': 'NR',
+      'North Western Region': 'NWR',
+      'Southern Region': 'SR',
+      'Western Region': 'WR'
+    };
+    return regionMap[region] || region;
+  };
+
   const extractDepartment = (details) => {
     if (!details) return '';
-
-    // Try Office Name first
     let match = details.match(/Office Name\s*([^•]*?)(?=Additional Details|Grade Pay|$)/);
-    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
-      return match[1].trim();
-    }
-
-    // Try Department Name
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') return match[1].trim();
     match = details.match(/Department Name\s*([^•]*?)(?=Office Name|Additional Details|Grade Pay|$)/);
-    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
-      return match[1].trim();
-    }
-
-    // Try Additional Details
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') return match[1].trim();
     match = details.match(/Additional Details of User Department\s*([^•]*?)(?=Grade Pay|$)/);
-    if (match && match[1].trim() && match[1].trim() !== 'N/A') {
-      return match[1].trim();
-    }
-
+    if (match && match[1].trim() && match[1].trim() !== 'N/A') return match[1].trim();
     return '';
   };
 
@@ -88,19 +92,26 @@ const SelectionPosts = () => {
 
   const extractFullEducation = (details) => {
     if (!details) return '';
-    let text = details.replace(/Level of Examination[^•]*/, '').trim();
-    text = text.replace(/Essential Qualifications\s*/, '');
+    let text = details;
+    text = text.replace(/Level of Examination[^•]*/i, '').trim();
+    text = text.replace(/Essential Qualifications\s*/i, '');
     text = text.replace(/●/g, '\n• ');
     text = text.replace(/##/g, '');
     text = text.replace(/\s+/g, ' ').trim();
-    return text;
+    if (!text) {
+      const eqMatch = details.match(/Essential Qualifications([^]*)$/i);
+      if (eqMatch) {
+        text = eqMatch[1].trim();
+        text = text.replace(/●/g, '\n• ');
+      }
+    }
+    return text || '';
   };
 
-const extractExperience = (details) => {
-  if (!details) return false;
-  
-  return /experience/i.test(details);
-};
+  const extractExperience = (details) => {
+    if (!details) return false;
+    return /experience/i.test(details);
+  };
 
   const extractPwdSuitable = (details) => {
     if (!details) return 'No';
@@ -130,8 +141,6 @@ const extractExperience = (details) => {
 
   const extractExamLevel = (educationDetails) => {
     if (!educationDetails) return 'Other';
-
-    // First check the Level of Examination field
     const levelMatch = educationDetails.match(/Level of Examination\s*([^•]*)/);
     if (levelMatch) {
       const level = levelMatch[1].trim().toLowerCase();
@@ -139,13 +148,10 @@ const extractExperience = (details) => {
       if (level.includes('higher secondary') || level.includes('10+2')) return '12th';
       if (level.includes('matriculation') || level.includes('10th')) return '10th';
     }
-
-    // Fallback to checking the whole text
     const details = educationDetails.toLowerCase();
     if (details.includes('graduation') || details.includes('bachelor') || details.includes('master') || details.includes('degree')) return 'Graduate';
     if (details.includes('higher secondary') || details.includes('10+2') || details.includes('12th') || details.includes('intermediate')) return '12th';
     if (details.includes('matriculation') || details.includes('10th') || details.includes('sslc')) return '10th';
-
     return 'Other';
   };
 
@@ -163,7 +169,6 @@ const extractExperience = (details) => {
 
   const parseVacancies = (vacancyString) => {
     if (!vacancyString) return { ur: 0, sc: 0, st: 0, obc: 0, ews: 0, total: 0, esm: 0, pwdOh: 0, pwdHh: 0, pwdVh: 0, pwdOthers: 0 };
-
     return {
       ur: parseInt(vacancyString.match(/UR\s*(\d+)/i)?.[1]) || 0,
       sc: parseInt(vacancyString.match(/SC\s*(\d+)/i)?.[1]) || 0,
@@ -184,49 +189,18 @@ const extractExperience = (details) => {
     return departmentalDetails.includes('Skill Test RequiredYes') ? 'Yes' : 'No';
   };
 
-  const getRegionCode = (region) => {
-    const regionMap = {
-      'Central Region': 'CR',
-      'Eastern Region': 'ER',
-      'Karnataka Kerala Region': 'KKR',
-      'Madhya Pradesh Region': 'MPR',
-      'North Eastern Region': 'NER',
-      'Northern Region': 'NR',
-      'North Western Region': 'NWR',
-      'Southern Region': 'SR',
-      'Western Region': 'WR'
-    };
-    return regionMap[region] || region;
-  };
-
-  // Get all searchable text from a post - EXTENSIVE search
-  const getSearchableText = (post) => {
-    return `
-      ${post.srNo} ${post.postName} ${post.postCode} ${post.region} ${post.regionCode}
-      ${post.department} ${post.ministry} ${post.fullEducation} ${post.classification}
-      ${post.payScale} ${post.payLevel} ${post.gender} ${post.advertisement}
-      ${post.ageLimit.min} ${post.ageLimit.max} ${post.experience}
-      ${post.pwdSuitable} ${post.skillTest}
-    `.toLowerCase();
-  };
-
-  // ==================== LOAD AND COMBINE DATA ====================
   useEffect(() => {
     try {
-      // Create a map of detailed posts by postCode
       const detailedMap = {};
       detailedPostsData.forEach(post => {
         detailedMap[post.postCode] = post;
       });
 
-      // Process raw data and merge with detailed data
       const processedData = rawPostsData.map((rawPost, index) => {
         const detailedPost = detailedMap[rawPost['Post Code']];
 
         if (detailedPost) {
-          // Use detailed post data
           const vacancies = parseVacancies(detailedPost.categoryWiseVacancy);
-
           return {
             srNo: index + 1,
             id: detailedPost.postCode,
@@ -254,10 +228,6 @@ const extractExperience = (details) => {
             rawAdditionalDetails: detailedPost.additionalDetails,
           };
         } else {
-          // Fallback to raw data parsing
-          const detailsParts = rawPost.Details.split(' ');
-
-          // Parse vacancy numbers from the end
           const numParts = rawPost.Details.match(/\d+/g);
           let vacancies = { ur: 0, sc: 0, st: 0, obc: 0, ews: 0, total: 0, esm: 0, pwdOh: 0, pwdHh: 0, pwdVh: 0, pwdOthers: 0 };
 
@@ -270,7 +240,6 @@ const extractExperience = (details) => {
             };
           }
 
-          // Extract age range
           const ageMatch = rawPost.Details.match(/(\d+)\s*-\s*(\d+)/);
           let ageMin = 18, ageMax = 30;
           if (ageMatch) {
@@ -278,7 +247,6 @@ const extractExperience = (details) => {
             ageMax = parseInt(ageMatch[2]);
           }
 
-          // Extract post name (everything before age)
           let postName = rawPost.Details;
           if (ageMatch) {
             const ageIndex = rawPost.Details.indexOf(ageMatch[0]);
@@ -300,16 +268,16 @@ const extractExperience = (details) => {
             payLevelNum: 0,
             examLevel: 'Other',
             fullEducation: '',
-            experience: 0,
+            experience: false,
             gender: '',
             ...vacancies,
             pwdSuitable: 'Unknown',
             skillTest: 'No',
             classification: '',
             advertisement: 'Phase-XIV/2026/Selection Posts',
-            rawEducationDetails: '',
-            rawDepartmentalDetails: '',
-            rawAdditionalDetails: '',
+            rawEducationDetails: rawPost.Details,
+            rawDepartmentalDetails: rawPost.Details,
+            rawAdditionalDetails: rawPost.Details,
           };
         }
       });
@@ -323,26 +291,14 @@ const extractExperience = (details) => {
     }
   }, []);
 
-  const getRegionFullName = (code) => {
-    const regionMap = {
-      'CR': 'Central Region', 'ER': 'Eastern Region', 'KKR': 'Karnataka Kerala Region',
-      'MPR': 'Madhya Pradesh Region', 'NER': 'North Eastern Region', 'NR': 'Northern Region',
-      'NWR': 'North Western Region', 'SR': 'Southern Region', 'WR': 'Western Region'
-    };
-    return regionMap[code] || code;
-  };
-
-  // Save cart
   useEffect(() => {
     localStorage.setItem('sscCart', JSON.stringify(cartItems));
   }, [cartItems]);
 
-  // Reset page on filter change
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, filters]);
 
-  // Close filter panel on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (filterPanelRef.current && !filterPanelRef.current.contains(event.target) &&
@@ -356,54 +312,63 @@ const extractExperience = (details) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showFilterPanel]);
 
-  // ==================== FILTERING LOGIC ====================
   const filteredPosts = useMemo(() => {
     return posts.filter(post => {
-      // Extensive search - checks ALL content
       if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
-        const searchWords = searchLower.split(/\s+/);
-        const searchableText = getSearchableText(post);
-
-        // All search words must be found somewhere in the post
-        for (const word of searchWords) {
-          if (!searchableText.includes(word)) return false;
-        }
+        const searchWords = searchLower.split(/\s+/).filter(word => word.length > 0);
+        
+        const searchableText = `
+          ${post.srNo}
+          ${post.postName}
+          ${post.postCode}
+          ${post.region}
+          ${post.regionCode}
+          ${post.department}
+          ${post.ministry}
+          ${post.classification}
+          ${post.payScale}
+          ${post.payLevel}
+          ${post.gender}
+          ${post.advertisement}
+          ${post.ageLimit.min}
+          ${post.ageLimit.max}
+          ${post.pwdSuitable}
+          ${post.experience ? 'experience required experience yes' : 'no experience required experience no'}
+          ${post.skillTest === 'Yes' ? 'skill test required skill test yes' : 'no skill test skill test no'}
+          ${post.fullEducation}
+          ${post.rawEducationDetails || ''}
+          ${post.rawDepartmentalDetails || ''}
+          ${post.rawAdditionalDetails || ''}
+          UR:${post.ur} SC:${post.sc} ST:${post.st} OBC:${post.obc} EWS:${post.ews} Total:${post.total}
+          ESM:${post.esm} OH:${post.pwdOh} HH:${post.pwdHh} VH:${post.pwdVh} Others:${post.pwdOthers}
+          ${post.examLevel}
+          ${post.examLevel === '10th' ? 'matriculation 10th sslc' : ''}
+          ${post.examLevel === '12th' ? 'higher secondary 10+2 intermediate 12th' : ''}
+          ${post.examLevel === 'Graduate' ? 'graduation bachelor master degree graduate bsc msc btech be bcom ba ma' : ''}
+        `.toLowerCase();
+        
+        const hasMatch = searchWords.some(word => searchableText.includes(word));
+        if (!hasMatch) return false;
       }
 
-      // Region filter
       if (filters.region && post.region !== filters.region) return false;
-
-      // Exam Level filter
       if (filters.examLevel && post.examLevel !== filters.examLevel) return false;
-
-      // Pay Level filter
       if (filters.payLevel && post.payLevel !== filters.payLevel) return false;
-
-      // Classification filter - partial match
       if (filters.classification && !post.classification.toLowerCase().includes(filters.classification.toLowerCase())) return false;
-
-      // Max Age filter - user's max age must be <= post's max age limit
+      
       if (filters.maxAge) {
         const userMaxAge = parseInt(filters.maxAge);
-        if (userMaxAge > post.ageLimit.max) return false;
+        if (!isNaN(userMaxAge) && userMaxAge > post.ageLimit.max) return false;
       }
-
-      // Experience filter
-// Experience filter
-if (filters.hasExperience === 'yes' && !post.experience) return false;
-if (filters.hasExperience === 'no' && post.experience) return false;
-
-      // Skill Test filter
+      
+      if (filters.hasExperience === 'yes' && !post.experience) return false;
+      if (filters.hasExperience === 'no' && post.experience) return false;
       if (filters.skillTest === 'yes' && post.skillTest !== 'Yes') return false;
       if (filters.skillTest === 'no' && post.skillTest === 'Yes') return false;
-
-      // PWD Suitable filter
       if (filters.pwdSuitable === 'yes' && post.pwdSuitable === 'No') return false;
       if (filters.pwdSuitable === 'no' && post.pwdSuitable.includes('Yes')) return false;
-
-      // In the filteredPosts useMemo, add these conditions:
-      // Category vacancy filters
+      
       if (filters.showUR && post.ur === 0) return false;
       if (filters.showSC && post.sc === 0) return false;
       if (filters.showST && post.st === 0) return false;
@@ -415,7 +380,6 @@ if (filters.hasExperience === 'no' && post.experience) return false;
     });
   }, [posts, searchTerm, filters]);
 
-  // ==================== SORTING ====================
   const sortedPosts = useMemo(() => {
     const sorted = [...filteredPosts];
     sorted.sort((a, b) => {
@@ -426,6 +390,38 @@ if (filters.hasExperience === 'no' && post.experience) return false;
         aVal = a.srNo;
         bVal = b.srNo;
       }
+      if (sortConfig.key === 'ageLimit') {
+        aVal = a.ageLimit.min;
+        bVal = b.ageLimit.min;
+      }
+      if (sortConfig.key === 'payLevelNum') {
+        aVal = a.payLevelNum;
+        bVal = b.payLevelNum;
+      }
+      if (sortConfig.key === 'total') {
+        aVal = a.total;
+        bVal = b.total;
+      }
+      if (sortConfig.key === 'ur') {
+        aVal = a.ur;
+        bVal = b.ur;
+      }
+      if (sortConfig.key === 'sc') {
+        aVal = a.sc;
+        bVal = b.sc;
+      }
+      if (sortConfig.key === 'st') {
+        aVal = a.st;
+        bVal = b.st;
+      }
+      if (sortConfig.key === 'obc') {
+        aVal = a.obc;
+        bVal = b.obc;
+      }
+      if (sortConfig.key === 'ews') {
+        aVal = a.ews;
+        bVal = b.ews;
+      }
 
       if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
       if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
@@ -434,14 +430,12 @@ if (filters.hasExperience === 'no' && post.experience) return false;
     return sorted;
   }, [filteredPosts, sortConfig]);
 
-  // ==================== PAGINATION ====================
-  const totalPages = Math.ceil(sortedPosts.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(sortedPosts.length / itemsPerPage));
   const paginatedPosts = sortedPosts.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
 
-  // ==================== UNIQUE VALUES FOR FILTERS ====================
   const filterOptions = useMemo(() => ({
     regions: [...new Set(posts.map(p => p.region))].filter(Boolean).sort(),
     examLevels: ['10th', '12th', 'Graduate', 'Other'],
@@ -453,7 +447,6 @@ if (filters.hasExperience === 'no' && post.experience) return false;
     classifications: [...new Set(posts.map(p => p.classification))].filter(Boolean).sort(),
   }), [posts]);
 
-  // ==================== HANDLERS ====================
   const handleSort = (key) => {
     setSortConfig(prev => ({
       key,
@@ -475,26 +468,25 @@ if (filters.hasExperience === 'no' && post.experience) return false;
   const clearCart = () => setCartItems([]);
   const isInCart = (postCode) => cartItems.some(item => item.postCode === postCode);
 
-const resetFilters = () => {
-  setFilters({
-    region: '', examLevel: '', payLevel: '', classification: '',
-    maxAge: '', hasExperience: '', skillTest: '', pwdSuitable: '',
-    showUR: false, showSC: false, showST: false, showOBC: false, showEWS: false, showESM: false,
-  });
-  setSearchTerm('');
-  setCurrentPage(1);
-};
+  const resetFilters = () => {
+    setFilters({
+      region: '', examLevel: '', payLevel: '', classification: '',
+      maxAge: '', hasExperience: '', skillTest: '', pwdSuitable: '',
+      showUR: false, showSC: false, showST: false, showOBC: false, showEWS: false, showESM: false,
+    });
+    setSearchTerm('');
+    setCurrentPage(1);
+  };
 
-const activeFilterCount = useMemo(() => {
-  let count = 0;
-  Object.values(filters).forEach(v => { 
-    if (v !== '' && v !== false) count++; 
-  });
-  if (searchTerm) count++;
-  return count;
-}, [filters, searchTerm]);
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    Object.values(filters).forEach(v => { 
+      if (v !== '' && v !== false) count++; 
+    });
+    if (searchTerm) count++;
+    return count;
+  }, [filters, searchTerm]);
 
-  // ==================== PRINT FUNCTIONS ====================
   const printPost = (post) => {
     const printWindow = window.open('', '_blank');
     const content = `
@@ -543,7 +535,7 @@ const activeFilterCount = useMemo(() => {
           <div class="section">
             <h2>Educational Qualifications</h2>
             <div class="value education-content">${post.fullEducation || 'N/A'}</div>
-            ${post.experience > 0 ? `<div style="margin-top: 15px;"><span class="label">Experience Required</span><div class="value">${post.experience} year${post.experience > 1 ? 's' : ''}</div></div>` : ''}
+            ${post.experience ? '<div style="margin-top: 15px;"><span class="label">Experience Required</span><div class="value">Yes</div></div>' : ''}
           </div>
           <div class="section">
             <h2>Vacancy Details</h2>
@@ -626,7 +618,6 @@ const activeFilterCount = useMemo(() => {
     return pages;
   };
 
-  // ==================== LOADING STATE ====================
   if (loading) {
     return (
       <div className="selection-posts-page">
@@ -640,11 +631,24 @@ const activeFilterCount = useMemo(() => {
     );
   }
 
-  // ==================== RENDER ====================
+  if (error) {
+    return (
+      <div className="selection-posts-page">
+        <div className="container">
+          <div className="error-container">
+            <div className="error-icon">⚠️</div>
+            <h2>Something went wrong</h2>
+            <p>{error}</p>
+            <button className="retry-btn" onClick={() => window.location.reload()}>Try Again</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="selection-posts-page">
       <div className="container">
-        {/* HEADER */}
         <div className="page-header">
           <div className="header-top">
             <div className="header-badge"><span>📋</span><span>SSC Phase-XIV/2026</span></div>
@@ -667,7 +671,6 @@ const activeFilterCount = useMemo(() => {
           </div>
         </div>
 
-        {/* CART PANEL */}
         {showCart && (
           <div className="cart-panel">
             <div className="cart-header-bar">
@@ -701,7 +704,6 @@ const activeFilterCount = useMemo(() => {
           </div>
         )}
 
-        {/* SEARCH AND FILTER */}
         <div className="search-filter-section">
           <div className="search-bar-wrapper">
             <span className="search-icon">🔍</span>
@@ -717,7 +719,6 @@ const activeFilterCount = useMemo(() => {
           </div>
         </div>
 
-        {/* FILTER PANEL */}
         {showFilterPanel && (
           <div className="filter-panel" ref={filterPanelRef}>
             <div className="filter-panel-header">
@@ -785,56 +786,31 @@ const activeFilterCount = useMemo(() => {
                 </select>
               </div>
             </div>
-            {/* CATEGORY FILTER SECTION */}
             <div className="filter-section">
               <label className="filter-section-label">📊 Show posts with vacancies in:</label>
               <div className="category-filter-group">
                 <label className="category-filter-item ur-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showUR}
-                    onChange={(e) => setFilters({ ...filters, showUR: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showUR} onChange={(e) => setFilters({ ...filters, showUR: e.target.checked })} />
                   <span>UR</span>
                 </label>
                 <label className="category-filter-item sc-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showSC}
-                    onChange={(e) => setFilters({ ...filters, showSC: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showSC} onChange={(e) => setFilters({ ...filters, showSC: e.target.checked })} />
                   <span>SC</span>
                 </label>
                 <label className="category-filter-item st-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showST}
-                    onChange={(e) => setFilters({ ...filters, showST: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showST} onChange={(e) => setFilters({ ...filters, showST: e.target.checked })} />
                   <span>ST</span>
                 </label>
                 <label className="category-filter-item obc-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showOBC}
-                    onChange={(e) => setFilters({ ...filters, showOBC: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showOBC} onChange={(e) => setFilters({ ...filters, showOBC: e.target.checked })} />
                   <span>OBC</span>
                 </label>
                 <label className="category-filter-item ews-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showEWS}
-                    onChange={(e) => setFilters({ ...filters, showEWS: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showEWS} onChange={(e) => setFilters({ ...filters, showEWS: e.target.checked })} />
                   <span>EWS</span>
                 </label>
                 <label className="category-filter-item esm-filter">
-                  <input
-                    type="checkbox"
-                    checked={filters.showESM}
-                    onChange={(e) => setFilters({ ...filters, showESM: e.target.checked })}
-                  />
+                  <input type="checkbox" checked={filters.showESM} onChange={(e) => setFilters({ ...filters, showESM: e.target.checked })} />
                   <span>ESM</span>
                 </label>
               </div>
@@ -842,67 +818,45 @@ const activeFilterCount = useMemo(() => {
           </div>
         )}
 
-        {/* RESULTS SUMMARY */}
-{/* RESULTS SUMMARY */}
-<div className="results-summary">
-  <div className="results-info">
-    <span className="results-count">
-      Showing <strong>{filteredPosts.length}</strong> of <strong>{posts.length}</strong> posts
-    </span>
-    <span className="results-vacancy-total">
-      • <strong>{filteredPosts.reduce((sum, p) => sum + p.total, 0).toLocaleString()}</strong> vacancies
-    </span>
-    {activeFilterCount > 0 && (
-      <span className="results-filtered">(filtered)</span>
-    )}
-  </div>
-  
-  {/* Category Stats */}
-  <div className="category-stats">
-    <span className="category-stat ur">
-      <span>UR:</span>
-      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ur, 0)}</span>
-    </span>
-    <span className="category-stat sc">
-      <span>SC:</span>
-      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.sc, 0)}</span>
-    </span>
-    <span className="category-stat st">
-      <span>ST:</span>
-      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.st, 0)}</span>
-    </span>
-    <span className="category-stat obc">
-      <span>OBC:</span>
-      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.obc, 0)}</span>
-    </span>
-    <span className="category-stat ews">
-      <span>EWS:</span>
-      <span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ews, 0)}</span>
-    </span>
-  </div>
-</div>
+        <div className="results-summary">
+          <div className="results-info">
+            <span className="results-count">
+              Showing <strong>{filteredPosts.length}</strong> of <strong>{posts.length}</strong> posts
+            </span>
+            <span className="results-vacancy-total">
+              • <strong>{filteredPosts.reduce((sum, p) => sum + p.total, 0).toLocaleString()}</strong> vacancies
+            </span>
+            {activeFilterCount > 0 && <span className="results-filtered">(filtered)</span>}
+          </div>
+          <div className="category-stats">
+            <span className="category-stat ur"><span>UR:</span><span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ur, 0)}</span></span>
+            <span className="category-stat sc"><span>SC:</span><span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.sc, 0)}</span></span>
+            <span className="category-stat st"><span>ST:</span><span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.st, 0)}</span></span>
+            <span className="category-stat obc"><span>OBC:</span><span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.obc, 0)}</span></span>
+            <span className="category-stat ews"><span>EWS:</span><span className="category-stat-value">{filteredPosts.reduce((sum, p) => sum + p.ews, 0)}</span></span>
+          </div>
+        </div>
 
-        {/* TABLE VIEW */}
         <div className="table-container">
           <table className="posts-table">
             <thead>
               <tr>
-                <th onClick={() => handleSort('srNo')} className="sortable" style={{ width: '50px' }}>S.No {sortConfig.key === 'srNo' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('srNo')} style={{ width: '50px' }}>S.No {sortConfig.key === 'srNo' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
                 <th style={{ width: '70px' }}>Region</th>
                 <th style={{ width: '90px' }}>Post Code</th>
                 <th style={{ minWidth: '200px' }}>Post Name</th>
                 <th style={{ minWidth: '180px' }}>Department</th>
-                <th style={{ width: '70px' }}>Age</th>
-                <th style={{ width: '80px' }}>Pay</th>
+                <th onClick={() => handleSort('ageLimit')} style={{ width: '70px' }}>Age {sortConfig.key === 'ageLimit' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('payLevelNum')} style={{ width: '80px' }}>Pay {sortConfig.key === 'payLevelNum' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
                 <th style={{ minWidth: '200px' }}>Exam Eligibility</th>
                 <th style={{ width: '55px' }}>Skill</th>
                 <th style={{ width: '55px' }}>Exp</th>
-                <th style={{ width: '45px' }}>UR</th>
-                <th style={{ width: '45px' }}>SC</th>
-                <th style={{ width: '45px' }}>ST</th>
-                <th style={{ width: '45px' }}>OBC</th>
-                <th style={{ width: '45px' }}>EWS</th>
-                <th style={{ width: '55px' }}>Total</th>
+                <th onClick={() => handleSort('ur')} style={{ width: '45px' }}>UR {sortConfig.key === 'ur' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('sc')} style={{ width: '45px' }}>SC {sortConfig.key === 'sc' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('st')} style={{ width: '45px' }}>ST {sortConfig.key === 'st' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('obc')} style={{ width: '45px' }}>OBC {sortConfig.key === 'obc' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('ews')} style={{ width: '45px' }}>EWS {sortConfig.key === 'ews' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
+                <th onClick={() => handleSort('total')} style={{ width: '55px' }}>Total {sortConfig.key === 'total' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</th>
                 <th style={{ width: '90px' }}>Actions</th>
               </tr>
             </thead>
@@ -929,10 +883,8 @@ const activeFilterCount = useMemo(() => {
                       <span className={`skill-badge ${post.skillTest === 'Yes' ? 'skill-yes' : 'skill-no'}`}>{post.skillTest === 'Yes' ? '✓' : '—'}</span>
                     </td>
                     <td style={{ textAlign: 'center' }}>
-  <span className={`exp-badge ${post.experience ? 'has-exp' : 'no-exp'}`}>
-    {post.experience ? 'Yes' : 'No'}
-  </span>
-</td>
+                      <span className={`exp-badge ${post.experience ? 'has-exp' : 'no-exp'}`}>{post.experience ? 'Yes' : 'No'}</span>
+                    </td>
                     <td className={`vac-cell ${post.ur > 0 ? 'has-vacancy' : ''}`}>{post.ur || '—'}</td>
                     <td className={`vac-cell ${post.sc > 0 ? 'has-vacancy' : ''}`}>{post.sc || '—'}</td>
                     <td className={`vac-cell ${post.st > 0 ? 'has-vacancy' : ''}`}>{post.st || '—'}</td>
@@ -955,7 +907,6 @@ const activeFilterCount = useMemo(() => {
           </table>
         </div>
 
-        {/* PAGINATION */}
         {totalPages > 1 && (
           <div className="pagination">
             <button className="pagination-btn prev" disabled={currentPage === 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>← Previous</button>
@@ -969,7 +920,6 @@ const activeFilterCount = useMemo(() => {
           </div>
         )}
 
-        {/* MODAL */}
         {showModal && selectedPost && (
           <div className="modal-overlay" onClick={() => setShowModal(false)}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -995,7 +945,7 @@ const activeFilterCount = useMemo(() => {
                 <div className="detail-section">
                   <h3>Educational Qualifications</h3>
                   <div className="education-content" style={{ whiteSpace: 'pre-line' }}>{selectedPost.fullEducation || 'N/A'}</div>
-                  {selectedPost.experience > 0 && <p className="experience-note"><strong>Experience Required:</strong> {selectedPost.experience} year{selectedPost.experience > 1 ? 's' : ''}</p>}
+                  {selectedPost.experience && <p className="experience-note"><strong>Experience Required:</strong> Yes</p>}
                 </div>
                 <div className="detail-section">
                   <h3>Vacancy Details</h3>
@@ -1031,7 +981,6 @@ const activeFilterCount = useMemo(() => {
           </div>
         )}
 
-        {/* DISCLAIMER */}
         <div className="disclaimer-banner">
           <span>ℹ️</span>
           <span>Data from SSC Phase-XIV/2026. Verify with official website.</span>
